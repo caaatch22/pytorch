@@ -53,8 +53,8 @@ DEFAULT_CORE_TESTS = [
     "test_cuda",
     "test_ops",
     "test_unary_ufuncs",
-    "test_binary_ufuncs",
-    "test_autograd"
+    "test_autograd",
+    "inductor/test_torchinductor"
 ]
 
 DISTRIBUTED_CORE_TESTS = [
@@ -63,7 +63,7 @@ DISTRIBUTED_CORE_TESTS = [
     "distributed/test_distributed_spawn"
 ]
 
-CONSOLIDATED_LOG_FILE_NAME = "pytorch_unit_tests.log"
+CONSOLIDATED_LOG_FILE_NAME="pytorch_unit_tests.log"
 
 # Utility to apply exclusions to a list of tests
 def apply_exclusions(test_list, exclusions):
@@ -88,6 +88,7 @@ def parse_xml_reports_as_dict(workflow_run_id, workflow_run_attempt, tag, workfl
     return test_cases
 
 def get_test_status(test_case):
+    # In order of priority: S=skipped, F=failure, E=error, P=pass
     if "skipped" in test_case and test_case["skipped"]:
         type_message = test_case["skipped"]
         if "type" in type_message and type_message['type'] == "pytest.xfail":
@@ -115,6 +116,7 @@ def get_test_running_time(test_case):
     return test_case.get("time", "")
 
 def summarize_xml_files(path, workflow_name):
+    # statistics
     TOTAL_TEST_NUM = 0
     TOTAL_PASSED_NUM = 0
     TOTAL_SKIPPED_NUM = 0
@@ -122,23 +124,25 @@ def summarize_xml_files(path, workflow_name):
     TOTAL_FAILED_NUM = 0
     TOTAL_ERROR_NUM = 0
 
+    #parse the xml files
     test_cases = parse_xml_reports_as_dict(-1, -1, 'testcase', workflow_name, path)
     test_file_and_status = namedtuple("test_file_and_status", ["file_name", "status"])
+    # results dict
     res = {}
-    res_item_list = ["PASSED", "SKIPPED", "XFAILED", "FAILED", "ERROR"]
+    res_item_list = [ "PASSED", "SKIPPED", "XFAILED", "FAILED", "ERROR" ]
     test_file_items = set()
-
     for (k, v) in list(test_cases.items()):
         file_name = k[0]
-        if file_name not in test_file_items:
+        if not file_name in test_file_items:
             test_file_items.add(file_name)
+            # initialization
             for item in res_item_list:
                 temp_item = test_file_and_status(file_name, item)
                 res[temp_item] = {}
             temp_item_statistics = test_file_and_status(file_name, "STATISTICS")
             res[temp_item_statistics] = {'TOTAL': 0, 'PASSED': 0, 'SKIPPED': 0, 'XFAILED': 0, 'FAILED': 0, 'ERROR': 0}
 
-    for (k, v) in list(test_cases.items()):
+    for (k,v) in list(test_cases.items()):
         file_name = k[0]
         class_name = k[1]
         test_name = k[2]
@@ -177,6 +181,7 @@ def summarize_xml_files(path, workflow_name):
             res[test_tuple_key_statistics]["ERROR"] += 1
             TOTAL_ERROR_NUM += 1
 
+    # generate statistics_dict
     statistics_dict = {
         "TOTAL": TOTAL_TEST_NUM,
         "PASSED": TOTAL_PASSED_NUM,
@@ -256,6 +261,7 @@ def run_entire_tests(
             f"python {test_run_test_path} {exclude_args} "
             "--inductor --verbose"
         )
+        #use test.sh for tests execution
         run_command_and_capture_output(command)
 
     copied_logs_path_destination = shutil.copytree(test_reports_src, copied_logs_path)
@@ -301,7 +307,6 @@ def run_priority_tests(
         )
         run_command_and_capture_output(command)
         del os.environ['HIP_VISIBLE_DEVICES']
-
     elif workflow_name == "distributed":
         test_suites = DISTRIBUTED_CORE_TESTS.copy()
         if exclude_core:
@@ -326,7 +331,6 @@ def run_priority_tests(
         )
         run_command_and_capture_output(command)
         del os.environ['HIP_VISIBLE_DEVICES']
-
     copied_logs_path_destination = shutil.copytree(test_reports_src, copied_logs_path)
     priority_results_dict = summarize_xml_files(copied_logs_path_destination, workflow_name)
 
@@ -376,7 +380,6 @@ def run_selected_tests(
         )
         run_command_and_capture_output(command)
         del os.environ['HIP_VISIBLE_DEVICES']
-
     elif workflow_name == "distributed":
         os.environ['TEST_CONFIG'] = 'distributed'
         os.environ['HIP_VISIBLE_DEVICES'] = '0,1'
@@ -394,7 +397,6 @@ def run_selected_tests(
         )
         run_command_and_capture_output(command)
         del os.environ['HIP_VISIBLE_DEVICES']
-
     elif workflow_name == "inductor":
         os.environ['TEST_CONFIG'] = 'inductor'
         copied_logs_path = os.path.join(
@@ -450,20 +452,25 @@ def run_test_and_summarize_results(
     test_run_test_path = os.path.join(pytorch_root_dir, "test/run_test.py")
     repo_test_log_folder_path = os.path.join(pytorch_root_dir, ".automation_logs/")
     test_reports_src = os.path.join(pytorch_root_dir, "test/test-reports/")
-
+    # all test results dict
     os.chdir(pytorch_root_dir)
     res_all_tests_dict = {}
-
+    
+    # create logs folder
     if not os.path.exists(repo_test_log_folder_path):
         os.mkdir(repo_test_log_folder_path)
-
+    
+    # Set common environment variables for all scenarios
     os.environ['CI'] = '1'
     os.environ['PYTORCH_TEST_WITH_ROCM'] = '1'
     os.environ['HSA_FORCE_FINE_GRAIN_PCIE'] = '1'
     os.environ['PYTORCH_TESTING_DEVICE_ONLY_FOR'] = 'cuda'
     os.environ['CONTINUE_THROUGH_ERROR'] = 'True'
-
+    
+    #Time stamp
     current_datetime = datetime.now().strftime("%Y%m%d_%H-%M-%S")
+    print("Current date & time : ", current_datetime)
+    # performed as Job ID
     overall_logs_path_current_run = os.path.join(repo_test_log_folder_path, current_datetime)
     os.mkdir(overall_logs_path_current_run)
 
@@ -471,7 +478,7 @@ def run_test_and_summarize_results(
     CONSOLIDATED_LOG_FILE_PATH = os.path.join(overall_logs_path_current_run, CONSOLIDATED_LOG_FILE_NAME)
 
     if not priority_tests and not default_list and not distributed_list and not inductor_list:
-        # Run entire tests for each workflow
+        # run entire tests for default, distributed and inductor workflows → use test.sh
         if not test_config:
             # default test process
             res_default_all = run_entire_tests(
@@ -565,7 +572,7 @@ def run_test_and_summarize_results(
             elif workflow == "inductor":
                 print("Inductor priority tests cannot run since no core tests defined with inductor workflow.")
     else:
-        # Run specified tests
+        # Run specified tests for each workflow
         if default_list:
             res_default_selected = run_selected_tests(
                 "default",
@@ -600,7 +607,7 @@ def run_test_and_summarize_results(
             )
             res_all_tests_dict["inductor"] = res_inductor_selected
 
-    # Restore environment variables
+    # restore environment variables
     os.environ.clear()
     os.environ.update(_environ)
 
@@ -648,4 +655,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
