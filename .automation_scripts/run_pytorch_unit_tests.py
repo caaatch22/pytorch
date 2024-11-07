@@ -37,7 +37,7 @@ from parse_xml_results import parse_xml_report
 from pprint import pprint
 from typing import Any, Dict, List
 
-# Unit test status list
+# unit test status list
 UT_STATUS_LIST = [
     "PASSED",
     "MISSED",
@@ -101,7 +101,6 @@ def get_test_status(test_case):
         return "ERROR"
     else:
         return "PASSED"
-
 def get_test_message(test_case, status=None):
     if status == "SKIPPED":
         return test_case.get("skipped", "")
@@ -455,19 +454,16 @@ def run_test_and_summarize_results(
     # all test results dict
     os.chdir(pytorch_root_dir)
     res_all_tests_dict = {}
-    
     # create logs folder
     if not os.path.exists(repo_test_log_folder_path):
         os.mkdir(repo_test_log_folder_path)
-    
     # Set common environment variables for all scenarios
     os.environ['CI'] = '1'
     os.environ['PYTORCH_TEST_WITH_ROCM'] = '1'
     os.environ['HSA_FORCE_FINE_GRAIN_PCIE'] = '1'
     os.environ['PYTORCH_TESTING_DEVICE_ONLY_FOR'] = 'cuda'
     os.environ['CONTINUE_THROUGH_ERROR'] = 'True'
-    
-    #Time stamp
+    # Time stamp
     current_datetime = datetime.now().strftime("%Y%m%d_%H-%M-%S")
     print("Current date & time : ", current_datetime)
     # performed as Job ID
