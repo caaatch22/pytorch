@@ -206,10 +206,15 @@ def build_triton(
                 shell=True,
             )
             print("ROCm libraries setup for triton installation...")
+        # Add the pip install command before the bdist_wheel call
+        check_call(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"]
+        )
 
         check_call(
             [sys.executable, "setup.py", "bdist_wheel"], cwd=triton_pythondir, env=env
         )
+        
 
         whl_path = next(iter((triton_pythondir / "dist").glob("*.whl")))
         shutil.copy(whl_path, Path.cwd())
