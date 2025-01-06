@@ -3,11 +3,12 @@
 #include <ATen/Context.h>
 
 #include <c10/core/CPUAllocator.h>
+#include <c10/util/Logging.h>
 
 #include <algorithm>
 #include <cctype>
-#include <string>
 #include <stdexcept>
+#include <string>
 
 #include <ATen/cpu/FlushDenormal.h>
 
@@ -72,7 +73,7 @@ bool Context::deterministicAlgorithmsWarnOnly() const {
   return _deterministic_algorithms_warn_only;
 }
 
-void Context::setDeterministicAlgorithms(bool b, bool warn_only=false) {
+void Context::setDeterministicAlgorithms(bool b, bool warn_only = false) {
   _deterministic_algorithms = b;
   _deterministic_algorithms_warn_only = warn_only;
 }
@@ -89,18 +90,21 @@ void Context::alertNotDeterministic(c10::string_view const& caller) {
   if (globalContext().deterministicAlgorithms()) {
     if (globalContext().deterministicAlgorithmsWarnOnly()) {
       TORCH_WARN(
-        caller, " does not have a deterministic implementation, but you set "
-        "'torch.use_deterministic_algorithms(True, warn_only=True)'. "
-        "You can file an issue at https://github.com/pytorch/pytorch/issues "
-        "to help us prioritize adding deterministic support for this operation.");
+          caller,
+          " does not have a deterministic implementation, but you set "
+          "'torch.use_deterministic_algorithms(True, warn_only=True)'. "
+          "You can file an issue at https://github.com/pytorch/pytorch/issues "
+          "to help us prioritize adding deterministic support for this operation.");
     } else {
-      TORCH_CHECK(false,
-        caller, " does not have a deterministic implementation, but you set "
-        "'torch.use_deterministic_algorithms(True)'. You can turn off "
-        "determinism just for this operation, or you can use the "
-        "'warn_only=True' option, if that's acceptable for your application. "
-        "You can also file an issue at https://github.com/pytorch/pytorch/issues "
-        "to help us prioritize adding deterministic support for this operation.");
+      TORCH_CHECK(
+          false,
+          caller,
+          " does not have a deterministic implementation, but you set "
+          "'torch.use_deterministic_algorithms(True)'. You can turn off "
+          "determinism just for this operation, or you can use the "
+          "'warn_only=True' option, if that's acceptable for your application. "
+          "You can also file an issue at https://github.com/pytorch/pytorch/issues "
+          "to help us prioritize adding deterministic support for this operation.");
     }
   }
 }
@@ -169,10 +173,12 @@ bool Context::userEnabledOverrideableSDP() const {
   return enabled_overrideable;
 }
 
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
-static const char cublas_config_var_name[] = "CUBLAS_WORKSPACE_CONFIG";
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
-static const char* const cublas_deterministic_configs[] = { ":4096:8", ":16:8" };
+static constexpr const auto cublas_config_var_name = "CUBLAS_WORKSPACE_CONFIG";
+static constexpr const std::array<const char*, 2> cublas_deterministic_configs =
+    {":4096:8", ":16:8"};
+#ifdef USE_ROCM
+static constexpr const auto hipblaslt_allow_tf32 = "HIPBLASLT_ALLOW_TF32";
+#endif
 
 bool Context::checkCuBLASConfigDeterministic() {
   bool cublas_config_deterministic = true;
@@ -180,10 +186,9 @@ bool Context::checkCuBLASConfigDeterministic() {
   // is set to deterministic setting
   if (hasCUDART() && (versionCUDART() >= 10020)) {
     char* workspace_config = std::getenv(cublas_config_var_name);
-    cublas_config_deterministic = (workspace_config != nullptr) && (
-      (strcmp(workspace_config, cublas_deterministic_configs[0]) == 0)
-      || (strcmp(workspace_config, cublas_deterministic_configs[1]) == 0)
-    );
+    cublas_config_deterministic = (workspace_config != nullptr) &&
+        ((strcmp(workspace_config, cublas_deterministic_configs[0]) == 0) ||
+         (strcmp(workspace_config, cublas_deterministic_configs[1]) == 0));
   }
   return cublas_config_deterministic;
 }
@@ -195,14 +200,19 @@ void Context::alertCuBLASConfigNotDeterministic() const {
   }
 
   auto msg = c10::str(
-    "Deterministic behavior was enabled with either `torch.use_deterministic_algorithms(True)` or ",
-    "`at::Context::setDeterministicAlgorithms(true)`, but this operation is not deterministic because ",
-    "it uses CuBLAS and you have CUDA >= 10.2. To enable deterministic behavior in this ",
-    "case, you must set an environment variable before running your PyTorch application: ",
-    cublas_config_var_name, "=", cublas_deterministic_configs[0], " or ",
-    cublas_config_var_name, "=", cublas_deterministic_configs[1], ". For more information, go to ",
-    "https://docs.nvidia.com/cuda/cublas/index.html#results-reproducibility"
-  );
+      "Deterministic behavior was enabled with either `torch.use_deterministic_algorithms(True)` or ",
+      "`at::Context::setDeterministicAlgorithms(true)`, but this operation is not deterministic because ",
+      "it uses CuBLAS and you have CUDA >= 10.2. To enable deterministic behavior in this ",
+      "case, you must set an environment variable before running your PyTorch application: ",
+      cublas_config_var_name,
+      "=",
+      cublas_deterministic_configs[0],
+      " or ",
+      cublas_config_var_name,
+      "=",
+      cublas_deterministic_configs[1],
+      ". For more information, go to ",
+      "https://docs.nvidia.com/cuda/cublas/index.html#results-reproducibility");
 
   if (deterministicAlgorithmsWarnOnly()) {
     TORCH_WARN(msg);
@@ -228,11 +238,27 @@ void Context::setBenchmarkLimitCuDNN(int b) {
 }
 
 bool Context::allowTF32CuBLAS() const {
+#ifdef USE_ROCM
+  const static auto allow_tf32 = c10::utils::check_env(hipblaslt_allow_tf32);
+  if (allow_tf32 != true) {
+    return false;
+  }
+#endif
   return float32_matmul_precision != at::Float32MatmulPrecision::HIGHEST;
 }
 
 void Context::setAllowTF32CuBLAS(bool b) {
-  float32_matmul_precision = b ? at::Float32MatmulPrecision::HIGH : at::Float32MatmulPrecision::HIGHEST;
+#ifdef USE_ROCM
+  const static auto allow_tf32 = c10::utils::check_env(hipblaslt_allow_tf32);
+  if (allow_tf32 != true) {
+    LOG(INFO)
+        << "torch.backends.cuda.matmul.allow_tf32 is not supported on ROCm by default. "
+        << "Please set environment variable HIPBLASLT_ALLOW_TF32=1 to enable it.";
+    return;
+  }
+#endif
+  float32_matmul_precision = b ? at::Float32MatmulPrecision::HIGH
+                               : at::Float32MatmulPrecision::HIGHEST;
 }
 
 Float32MatmulPrecision Context::float32MatmulPrecision() const {
@@ -243,9 +269,10 @@ void Context::setFloat32MatmulPrecision(Float32MatmulPrecision p) {
   float32_matmul_precision = p;
 }
 
-void Context::setFloat32MatmulPrecision(const std::string &s) {
-  auto match = [this](const std::string & s_) {
-    // TODO: consider if CuDNN field needs to also be set for potential future CuDNN ops like multi-headed attention
+void Context::setFloat32MatmulPrecision(const std::string& s) {
+  auto match = [this](const std::string& s_) {
+    // TODO: consider if CuDNN field needs to also be set for potential future
+    // CuDNN ops like multi-headed attention
     if (s_ == "highest") {
       float32_matmul_precision = at::Float32MatmulPrecision::HIGHEST;
       return true;
@@ -258,13 +285,21 @@ void Context::setFloat32MatmulPrecision(const std::string &s) {
     }
     return false;
   };
-  if (match(s)) { return; }
+  if (match(s)) {
+    return;
+  }
   std::string sl;
-  std::transform(s.begin(), s.end(), sl.begin(),
-                 [](unsigned char c) -> unsigned char { return std::tolower(c); });
-  if (match(sl)) { return; }
-  TORCH_WARN(s, " is not one of 'highest', 'high', or 'medium'; the current"
-    "setFloat32MatmulPrecision call has no effect.");
+  std::transform(
+      s.begin(), s.end(), sl.begin(), [](unsigned char c) -> unsigned char {
+        return std::tolower(c);
+      });
+  if (match(sl)) {
+    return;
+  }
+  TORCH_WARN(
+      s,
+      " is not one of 'highest', 'high', or 'medium'; the current"
+      "setFloat32MatmulPrecision call has no effect.");
 }
 
 at::LinalgBackend Context::linalgPreferredBackend() const {
@@ -273,16 +308,17 @@ at::LinalgBackend Context::linalgPreferredBackend() const {
 
 void Context::setLinalgPreferredBackend(at::LinalgBackend b) {
   linalg_preferred_backend = b;
-  TORCH_CHECK((b != at::LinalgBackend::Cusolver) || hasCuSOLVER(),
+  TORCH_CHECK(
+      (b != at::LinalgBackend::Cusolver) || hasCuSOLVER(),
       "Cannot set preferred backend to cuSOLVER if PyTorch has not been compiled with cuSOLVER.");
-  TORCH_CHECK((b != at::LinalgBackend::Magma) || hasMAGMA(),
+  TORCH_CHECK(
+      (b != at::LinalgBackend::Magma) || hasMAGMA(),
       "Cannot set preferred backend to MAGMA if PyTorch has not been compiled with MAGMA.");
   if (b != at::LinalgBackend::Default) {
     TORCH_WARN_ONCE(
-      "torch.backends.cuda.preferred_linalg_library is an experimental feature. "
-      "If you see any error or unexpected behavior when this flag is set "
-      "please file an issue on GitHub."
-    );
+        "torch.backends.cuda.preferred_linalg_library is an experimental feature. "
+        "If you see any error or unexpected behavior when this flag is set "
+        "please file an issue on GitHub.");
   }
 }
 
@@ -290,18 +326,20 @@ at::BlasBackend Context::blasPreferredBackend() {
 #ifdef USE_ROCM
   if (blas_preferred_backend == at::BlasBackend::Cublaslt) {
     static const bool hipblaslt_unsupported = []() {
-      static const std::vector<std::string> archs = {"gfx90a", "gfx940", "gfx941", "gfx942"};
-      for (auto index: c10::irange(getNumGPUs())) {
+      static const std::vector<std::string> archs = {
+          "gfx90a", "gfx940", "gfx941", "gfx942"};
+      for (auto index : c10::irange(getNumGPUs())) {
         if (!detail::getCUDAHooks().isGPUArch(index, archs)) {
           TORCH_WARN_ONCE(
-            "Attempting to use hipBLASLt on an unsupported architecture! "
-            "Overriding blas backend to hipblas");
+              "Attempting to use hipBLASLt on an unsupported architecture! "
+              "Overriding blas backend to hipblas");
           return true;
         }
       }
       return false;
     }();
-    if (hipblaslt_unsupported) blas_preferred_backend = at::BlasBackend::Cublas;
+    if (hipblaslt_unsupported)
+      blas_preferred_backend = at::BlasBackend::Cublas;
   }
 #endif
   return blas_preferred_backend;
@@ -310,18 +348,17 @@ at::BlasBackend Context::blasPreferredBackend() {
 void Context::setBlasPreferredBackend(at::BlasBackend b) {
 #ifdef _MSC_VER
   TORCH_WARN_ONCE(
-    "torch.backends.cuda.preferred_blas_library is an experimental feature. "
-    "It is not supported on Windows."
-  );
+      "torch.backends.cuda.preferred_blas_library is an experimental feature. "
+      "It is not supported on Windows.");
 #else
-  TORCH_CHECK((b != at::BlasBackend::Cublaslt) || hasCuBLASLt(),
+  TORCH_CHECK(
+      (b != at::BlasBackend::Cublaslt) || hasCuBLASLt(),
       "Cannot set preferred backend to cuBLASLt if PyTorch has not been compiled with cuBLASLt.");
   if (b != at::BlasBackend::Cublas) {
     TORCH_WARN_ONCE(
-      "torch.backends.cuda.preferred_blas_library is an experimental feature. "
-      "If you see any error or unexpected behavior when this flag is set "
-      "please file an issue on GitHub."
-    );
+        "torch.backends.cuda.preferred_blas_library is an experimental feature. "
+        "If you see any error or unexpected behavior when this flag is set "
+        "please file an issue on GitHub.");
   }
   blas_preferred_backend = b;
 #endif
@@ -342,7 +379,6 @@ bool Context::allowBF16ReductionCuBLAS() const {
 void Context::setAllowBF16ReductionCuBLAS(bool b) {
   allow_bf16_reduction_cublas = b;
 }
-
 
 bool Context::hasMKL() {
 #if AT_MKL_ENABLED()
@@ -393,7 +429,7 @@ at::QEngine Context::qEngine() const {
        * It combines goodness of fbgemm and onednn by dispatching.
        * If onednn not available, always dispatch to fbgemm.
        * Make it default qengine for X86 CPU platforms.
-      */
+       */
       qengine = at::kX86;
     }
 #endif
@@ -422,7 +458,7 @@ const std::vector<at::QEngine>& Context::supportedQEngines() {
 #ifdef USE_PYTORCH_QNNPACK
     engines.push_back(at::kQNNPACK);
 #endif
-#else  // C10_MOBILE
+#else // C10_MOBILE
 #ifdef USE_PYTORCH_QNNPACK
     engines.push_back(at::kQNNPACK);
 #endif
@@ -504,7 +540,8 @@ bool NoTF32Guard::should_disable_tf32() {
 // Ops can query this flag to know they are in the backward pass.
 // This information can be used, for example, to select implementations
 // with different numerical or performance characteristics.
-// See https://pytorch.org/docs/stable/notes/numerical_accuracy.html for details.
+// See https://pytorch.org/docs/stable/notes/numerical_accuracy.html for
+// details.
 thread_local bool rocm_is_backward_pass;
 
 ROCmBackwardPassGuard::ROCmBackwardPassGuard() {
@@ -528,20 +565,24 @@ void Context::setDisplayVmapFallbackWarnings(bool enabled) {
 }
 
 void Context::setDefaultMobileCPUAllocator() {
-  TORCH_CHECK(prev_allocator_ptr_ == nullptr,
+  TORCH_CHECK(
+      prev_allocator_ptr_ == nullptr,
       "Already within the scope of another non-default cpu allocator."
       "Cannot set another allocator.");
-  // Setting the priority high to make sure no other allocator gets used instead of this.
+  // Setting the priority high to make sure no other allocator gets used instead
+  // of this.
   prev_allocator_ptr_ = c10::GetCPUAllocator();
   c10::SetCPUAllocator(c10::GetDefaultMobileCPUAllocator(), /*priority*/ 100);
 }
 
 void Context::unsetDefaultMobileCPUAllocator() {
-  TORCH_CHECK(prev_allocator_ptr_ != nullptr,
+  TORCH_CHECK(
+      prev_allocator_ptr_ != nullptr,
       "setDefaultMobileCPUAllocator must have been called "
       "before unsetDefaultMobileCPUAllocator.");
-  // Setting the priority high to make sure no other allocator gets used instead of this.
-  c10::SetCPUAllocator(prev_allocator_ptr_ , /*priority*/ 100);
+  // Setting the priority high to make sure no other allocator gets used instead
+  // of this.
+  c10::SetCPUAllocator(prev_allocator_ptr_, /*priority*/ 100);
   prev_allocator_ptr_ = nullptr;
 }
 
@@ -550,14 +591,15 @@ bool Context::allowFP16ReductionCPU() const {
 }
 
 void Context::setAllowFP16ReductionCPU(bool b) {
-  if ( b && !allow_fp16_reduction_cpu) {
+  if (b && !allow_fp16_reduction_cpu) {
     // Check that CPU supports fp16 reductions
 #if defined(__aarch64__) && !defined(C10_MOBILE)
     if (!cpuinfo_initialize() || !cpuinfo_has_arm_fp16_arith())
 #else
     if (true)
 #endif
-      throw std::runtime_error("Float16 arithmetic is not supported by the CPU!");
+      throw std::runtime_error(
+          "Float16 arithmetic is not supported by the CPU!");
   }
   allow_fp16_reduction_cpu = b;
 }
